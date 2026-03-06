@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 
 	"greenlight.themt.tech/internal/validator"
@@ -25,21 +26,57 @@ type MovieModel struct {
 	DB *sql.DB
 }
 
-func ValidateMovie(v *validator.Validator, movie *Movie) {
-	v.Check(movie.Title != "", "title", "must be provided")
-	v.Check(len(movie.Title) <= 500, "title", "must not be more than 500 bytes long")
+func (m MovieModel) GetAll(title string, genres []string, filters Filters) ([]*Movie, Metadata, error) {
+	query := fmt.Sprintf(`
+			SELECT count(*) OVER(), id, created_at, title, year, runtime, genres, version
+			FROM movies
+			WHERE (to_tsvector('simple', title) @@ plainto_tsquery('simple', $1) or $1 = '')
+			AND (genres @> $2 OR $2 = '{}')
+			ORDER BY %s %s, id ASC
+			LIMIT $3 OFFSET $4`, filters.sortColumn(), filters.sortDirection())
 
-	v.Check(movie.Year != 0, "year", "must be provided")
-	v.Check(movie.Year >= 1888, "year", "must be greater than 1888")
-	v.Check(movie.Year <= int32(time.Now().Year()), "year", "must not be in the future")
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
 
-	v.Check(movie.Runtime != 0, "runtime", "must be provided")
-	v.Check(movie.Runtime > 0, "runtime", "must be a positive integer")
+	args := []any{title, pq.Array(genres), filters.limit(), filters.offset()}
 
-	v.Check(movie.Genres != nil, "genres", "must be provided")
-	v.Check(len(movie.Genres) >= 1, "genres", "must contain at least 1 genre")
-	v.Check(len(movie.Genres) <= 5, "genres", "must not contain more than 5 genres")
-	v.Check(validator.Unique(movie.Genres), "genres", "must not contain duplicate values")
+	rows, err := m.DB.QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, Metadata{}, err
+	}
+
+	defer rows.Close()
+
+	totalRecords := 0
+	movies := []*Movie{}
+
+	for rows.Next() {
+		var movie Movie
+
+		err := rows.Scan(
+			&totalRecords,
+			&movie.ID,
+			&movie.CreatedAt,
+			&movie.Title,
+			&movie.Year,
+			&movie.Runtime,
+			pq.Array(&movie.Genres),
+			&movie.Version,
+		)
+		if err != nil {
+			return nil, Metadata{}, err
+		}
+
+		movies = append(movies, &movie)
+	}
+
+	if err = rows.Err(); err != nil {
+		return nil, Metadata{}, err
+	}
+
+	metadata := calculateMetadata(totalRecords, filters.Page, filters.PageSize)
+
+	return movies, metadata, nil
 }
 
 func (m MovieModel) Insert(movie *Movie) error {
@@ -152,4 +189,21 @@ func (m MovieModel) Delete(id int64) error {
 	}
 
 	return nil
+}
+
+func ValidateMovie(v *validator.Validator, movie *Movie) {
+	v.Check(movie.Title != "", "title", "must be provided")
+	v.Check(len(movie.Title) <= 500, "title", "must not be more than 500 bytes long")
+
+	v.Check(movie.Year != 0, "year", "must be provided")
+	v.Check(movie.Year >= 1888, "year", "must be greater than 1888")
+	v.Check(movie.Year <= int32(time.Now().Year()), "year", "must not be in the future")
+
+	v.Check(movie.Runtime != 0, "runtime", "must be provided")
+	v.Check(movie.Runtime > 0, "runtime", "must be a positive integer")
+
+	v.Check(movie.Genres != nil, "genres", "must be provided")
+	v.Check(len(movie.Genres) >= 1, "genres", "must contain at least 1 genre")
+	v.Check(len(movie.Genres) <= 5, "genres", "must not contain more than 5 genres")
+	v.Check(validator.Unique(movie.Genres), "genres", "must not contain duplicate values")
 }
