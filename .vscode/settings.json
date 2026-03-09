@@ -1,7 +1,12 @@
 {
   "cSpell.words": [
+    "envrc",
+    "GOARCH",
     "greenlight",
+    "psql",
+    "realip",
     "Safelist",
+    "staticcheck",
     "tmpl"
   ]
 }
