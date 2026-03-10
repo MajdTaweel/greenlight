@@ -4,6 +4,8 @@
     "envrc",
     "GOARCH",
     "greenlight",
+    "healthcheck",
+    "jsonlog",
     "psql",
     "realip",
     "Safelist",
